@@ -1,0 +1,36 @@
+namespace format;
+
+enum Type : byte {
+  TombStone = 0,
+  File,  
+  Dir, 
+  Link,
+}
+
+table Block {
+  id:string;
+  size:long;
+}
+
+struct TimeSpec {
+  seconds:long;
+  nanoseconds:int;
+}
+
+table Entry {
+  path:string;
+  size:long;
+  type:Type;
+  hash:string;
+  blocks:[Block];
+  uname:string;
+  gname:string;
+  flags:int;
+  perm:int;
+  created_at:TimeSpec;
+  modified_at:TimeSpec;
+}
+
+table TOC {
+  paths:[Entry];
+}
