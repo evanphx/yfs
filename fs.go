@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -44,6 +45,8 @@ type FS struct {
 
 	toc    *format.TOC
 	blocks *format.BlockTOC
+
+	tocHeader format.TOCHeader
 
 	blockAccess blockAccess
 }
@@ -145,7 +148,7 @@ func (f *FS) WriteFile(path string, r io.Reader) error {
 	return f.writeFile(path, r, &format.Entry{})
 }
 
-func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) error {
+func (f *FS) writeAsBlocks(r io.Reader) (*format.BlockSet, error) {
 	backing := getBlockBuf(0)
 
 	buf := bytes.NewBuffer(backing[:0])
@@ -156,7 +159,7 @@ func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) error {
 
 	fh, err := blake2b.New256(nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	c := rabin.NewChunker(table, io.TeeReader(r, buf), MinBlock, AverageBlock, MaxBlock)
@@ -170,21 +173,21 @@ func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) error {
 				break
 			}
 
-			return err
+			return nil, err
 		}
 
 		total += int64(len)
 
 		h, err := blake2b.New256(nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		block := buf.Next(len)
 
 		_, err = h.Write(block)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		sum := h.Sum(nil)
@@ -193,7 +196,7 @@ func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) error {
 
 		clen, err := f.writeBlock(sum[:], block)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if clen != -1 {
@@ -212,10 +215,25 @@ func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) error {
 
 	fhSum := fh.Sum(nil)
 
-	ent.ByteSize = total
+	set := &format.BlockSet{
+		Blocks:   blocks,
+		Sum:      fhSum[:],
+		ByteSize: total,
+	}
+
+	return set, nil
+}
+
+func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) error {
+	set, err := f.writeAsBlocks(r)
+	if err != nil {
+		return err
+	}
+
+	ent.ByteSize = set.ByteSize
 	ent.Type = File
-	ent.Hash = fhSum[:]
-	ent.Blocks = blocks
+	ent.Hash = set.Sum
+	ent.Blocks = set
 
 	f.toc.Paths[path] = ent
 
@@ -238,17 +256,24 @@ func (f *FS) writeBlock(sum []byte, block []byte) (int64, error) {
 }
 
 func (f *FS) flushTOC() error {
-	buf := buffers.Get().([]byte)
+	buf := getBlockBuf(f.toc.Size())
 
-	tocSize := f.toc.Size()
-
-	if len(buf) < tocSize {
-		buf = make([]byte, tocSize+64)
+	tlen, err := f.toc.MarshalTo(buf)
+	if err != nil {
+		return err
 	}
 
-	defer buffers.Put(buf)
+	set, err := f.writeAsBlocks(bytes.NewReader(buf[:tlen]))
+	if err != nil {
+		return err
+	}
 
-	len, err := f.toc.MarshalTo(buf)
+	putBlockBuf(buf)
+
+	buf = getBlockBuf(set.Size())
+	defer putBlockBuf(buf)
+
+	slen, err := set.MarshalTo(buf)
 	if err != nil {
 		return err
 	}
@@ -260,7 +285,26 @@ func (f *FS) flushTOC() error {
 
 	defer of.Close()
 
-	_, err = of.Write(buf[:len])
+	hdata := make([]byte, 256)
+
+	hlen, err := f.tocHeader.MarshalTo(hdata[1:])
+	if hlen > 255 {
+		return fmt.Errorf("header too large! %d > 255", hlen)
+	}
+
+	hdata[0] = byte(hlen)
+
+	_, err = of.Write(hdata)
+	if err != nil {
+		return err
+	}
+
+	buf, err = f.blockAccess.writeTransform(buf[:slen])
+	if err != nil {
+		return err
+	}
+
+	_, err = of.Write(buf)
 	return err
 }
 
@@ -291,39 +335,55 @@ func (f *FS) flushBlockTOC() error {
 	return err
 }
 
+var (
+	ErrCompressionMismatch = errors.New("compression setting mismatched")
+	ErrWrongEncryptionKey  = errors.New("wrong encryption key provided")
+)
+
 func (f *FS) readTOC() error {
-	of, err := os.Open(filepath.Join(f.root, f.tocPath))
+	data, err := ioutil.ReadFile(filepath.Join(f.root, f.tocPath))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-
-		return nil
+		return err
 	}
 
-	defer of.Close()
+	var fheader format.TOCHeader
 
-	buf := buffers.Get().([]byte)
+	sz := data[0]
 
-	stat, err := of.Stat()
+	err = fheader.Unmarshal(data[1 : 1+sz])
 	if err != nil {
 		return err
 	}
 
-	tocSize := int(stat.Size())
-
-	if len(buf) < tocSize {
-		buf = make([]byte, tocSize+64)
+	if f.tocHeader.Compressed != fheader.Compressed {
+		return ErrCompressionMismatch
 	}
 
-	defer buffers.Put(buf)
+	if !bytes.Equal(f.tocHeader.KeyId, fheader.KeyId) {
+		return ErrWrongEncryptionKey
+	}
 
-	_, err = of.Read(buf[:tocSize])
+	buf, err := f.blockAccess.readTransform(data[256:])
 	if err != nil {
 		return err
 	}
 
-	return f.toc.Unmarshal(buf[:tocSize])
+	var set format.BlockSet
+
+	err = set.Unmarshal(buf)
+	if err != nil {
+		return err
+	}
+
+	data, err = f.blockAccess.readSet(&set)
+	if err != nil {
+		return err
+	}
+
+	return f.toc.Unmarshal(data)
 }
 
 func (f *FS) readBlocksTOC() error {
@@ -417,7 +477,7 @@ func (f *FS) ReadFile(path string) (io.Reader, error) {
 		return nil, os.ErrNotExist
 	}
 
-	return &blockReader{f: f, blocks: entry.Blocks}, nil
+	return &blockReader{f: f, blocks: entry.Blocks.Blocks}, nil
 }
 
 var ErrCorruptFile = errors.New("corrupt file detected")
@@ -428,7 +488,7 @@ func (f *FS) RemoveFile(path string) error {
 		return os.ErrNotExist
 	}
 
-	for _, blk := range entry.Blocks {
+	for _, blk := range entry.Blocks.Blocks {
 		bi, ok := f.blocks.FindBlock(blk.Id)
 		if ok != true {
 			return ErrCorruptFile

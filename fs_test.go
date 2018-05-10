@@ -83,11 +83,11 @@ func TestFS(t *testing.T) {
 		fooBlocks := fs.toc.Paths["foo"]
 		barBlocks := fs.toc.Paths["bar"]
 
-		common := len(fooBlocks.Blocks) - 1
+		common := len(fooBlocks.Blocks.Blocks) - 1
 
-		assert.Equal(t, fooBlocks.Blocks[:common], barBlocks.Blocks[:common])
+		assert.Equal(t, fooBlocks.Blocks.Blocks[:common], barBlocks.Blocks.Blocks[:common])
 
-		for _, blk := range fooBlocks.Blocks[:common] {
+		for _, blk := range fooBlocks.Blocks.Blocks[:common] {
 			blkinfo, ok := fs.blocks.FindBlock(blk.Id)
 			require.True(t, ok)
 
@@ -141,7 +141,7 @@ func TestFS(t *testing.T) {
 		fds, err := ioutil.ReadDir(filepath.Join(path, "blocks"))
 		require.NoError(t, err)
 
-		assert.Equal(t, len(fds), 1)
+		assert.Equal(t, 2, len(fds))
 
 		err = fs.RemoveFile("foo")
 		require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestFS(t *testing.T) {
 		fds, err = ioutil.ReadDir(filepath.Join(path, "blocks"))
 		require.NoError(t, err)
 
-		assert.Equal(t, len(fds), 0)
+		assert.Equal(t, 1, len(fds))
 	})
 
 	n.It("can snapshot the filesystem", func(t *testing.T) {
@@ -168,7 +168,7 @@ func TestFS(t *testing.T) {
 		fds, err := ioutil.ReadDir(filepath.Join(path, "blocks"))
 		require.NoError(t, err)
 
-		assert.Equal(t, len(fds), 1)
+		assert.Equal(t, len(fds), 2)
 
 		snap, err := fs.ReadSnapshot("snap1")
 		require.NoError(t, err)
@@ -193,13 +193,12 @@ func TestFS(t *testing.T) {
 		err = fs.WriteFile("foo", bytes.NewReader(zeros))
 		require.NoError(t, err)
 
-		fs2, err := NewFS(path)
-		require.NoError(t, err)
+		id := fs.toc.Paths["foo"].Blocks.Blocks[0].Id
 
-		r, err := fs2.ReadFile("foo")
-		require.NoError(t, err)
+		var rogueBA blockAccess
+		rogueBA.root = filepath.Join(path, "blocks")
 
-		data, err := ioutil.ReadAll(r)
+		data, err := rogueBA.readBlock(id)
 		require.NoError(t, err)
 
 		assert.NotEqual(t, "hello", string(data))
@@ -207,7 +206,7 @@ func TestFS(t *testing.T) {
 		fs3, err := NewFS(path, WithEncryption(key))
 		require.NoError(t, err)
 
-		r, err = fs3.ReadFile("foo")
+		r, err := fs3.ReadFile("foo")
 		require.NoError(t, err)
 
 		data, err = ioutil.ReadAll(r)
@@ -232,7 +231,7 @@ func TestFS(t *testing.T) {
 
 		fooBlocks := fs.toc.Paths["foo"]
 
-		assert.True(t, len(fooBlocks.Blocks) > 1)
+		assert.True(t, len(fooBlocks.Blocks.Blocks) > 1)
 
 		fs2, err := NewFS(path, WithEncryption(key))
 		require.NoError(t, err)
@@ -262,7 +261,7 @@ func TestFS(t *testing.T) {
 
 		fooBlocks := fs.toc.Paths["foo"]
 
-		assert.True(t, len(fooBlocks.Blocks) > 1)
+		assert.True(t, len(fooBlocks.Blocks.Blocks) > 1)
 
 		fs2, err := NewFS(path, WithEncryption(key), WithLZ4())
 		require.NoError(t, err)

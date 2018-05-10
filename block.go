@@ -1,10 +1,13 @@
 package yfs
 
 import (
+	"bytes"
 	"encoding/hex"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+
+	"github.com/evanphx/yfs/format"
 )
 
 type blockTransform interface {
@@ -25,6 +28,28 @@ type blockAccess struct {
 	}
 }
 
+func (ba *blockAccess) writeTransform(block []byte) ([]byte, error) {
+	if ba.write.compression != nil {
+		out, _, err := ba.write.compression.Transform(block)
+		if err != nil {
+			return nil, err
+		}
+
+		block = out
+	}
+
+	if ba.write.encryption != nil {
+		out, _, err := ba.write.encryption.Transform(block)
+		if err != nil {
+			return nil, err
+		}
+
+		block = out
+	}
+
+	return block, nil
+}
+
 func (ba *blockAccess) writeBlock(sum []byte, block []byte) (int64, error) {
 	id := hex.EncodeToString(sum)
 
@@ -36,30 +61,9 @@ func (ba *blockAccess) writeBlock(sum []byte, block []byte) (int64, error) {
 
 	path := filepath.Join(dir, id)
 
-	if ba.write.compression != nil {
-		out, temp, err := ba.write.compression.Transform(block)
-		if err != nil {
-			return 0, err
-		}
-
-		if temp != nil {
-			defer putBlockBuf(temp)
-		}
-
-		block = out
-	}
-
-	if ba.write.encryption != nil {
-		out, temp, err := ba.write.encryption.Transform(block)
-		if err != nil {
-			return 0, err
-		}
-
-		if temp != nil {
-			defer putBlockBuf(temp)
-		}
-
-		block = out
+	block, err = ba.writeTransform(block)
+	if err != nil {
+		return 0, err
 	}
 
 	of, err := os.Create(path)
@@ -82,6 +86,28 @@ func (ba *blockAccess) writeBlock(sum []byte, block []byte) (int64, error) {
 	return stat.Size(), nil
 }
 
+func (ba *blockAccess) readTransform(block []byte) ([]byte, error) {
+	if ba.read.encryption != nil {
+		out, _, err := ba.read.encryption.Transform(block)
+		if err != nil {
+			return nil, err
+		}
+
+		block = out
+	}
+
+	if ba.read.compression != nil {
+		out, _, err := ba.read.compression.Transform(block)
+		if err != nil {
+			return nil, err
+		}
+
+		block = out
+	}
+
+	return block, nil
+}
+
 func (ba *blockAccess) readBlock(sum []byte) ([]byte, error) {
 	hid := hex.EncodeToString(sum)
 
@@ -98,23 +124,20 @@ func (ba *blockAccess) readBlock(sum []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if ba.read.encryption != nil {
-		out, _, err := ba.read.encryption.Transform(rawBlock)
+	return ba.readTransform(rawBlock)
+}
+
+func (ba *blockAccess) readSet(set *format.BlockSet) ([]byte, error) {
+	var buf bytes.Buffer
+
+	for _, blk := range set.Blocks {
+		data, err := ba.readBlock(blk.Id)
 		if err != nil {
 			return nil, err
 		}
 
-		rawBlock = out
+		buf.Write(data)
 	}
 
-	if ba.read.compression != nil {
-		out, _, err := ba.read.compression.Transform(rawBlock)
-		if err != nil {
-			return nil, err
-		}
-
-		rawBlock = out
-	}
-
-	return rawBlock, nil
+	return buf.Bytes(), nil
 }

@@ -50,6 +50,7 @@ func (l lz4Reader) Transform(block []byte) ([]byte, []byte, error) {
 
 func WithLZ4() func(f *FS) {
 	return func(f *FS) {
+		f.tocHeader.Compressed = true
 		f.blockAccess.write.compression = lz4Writer{}
 		f.blockAccess.read.compression = lz4Reader{}
 	}

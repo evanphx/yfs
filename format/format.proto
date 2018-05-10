@@ -2,8 +2,19 @@ syntax = "proto3";
 
 package format;
 
+message TOCHeader {
+  bytes key_id = 1;
+  bool compressed = 2;
+}
+
 message Block {
   bytes id = 1;
+}
+
+message BlockSet {
+  repeated Block blocks = 1;
+  bytes sum = 2;
+  int64 byte_size = 3;
 }
 
 message TimeSpec {
@@ -22,7 +33,7 @@ message Entry {
   int64 byte_size = 1;
   Type type = 2;
   bytes hash = 3;
-  repeated Block blocks = 4;
+  BlockSet blocks = 4;
   string uname = 5;
   string gname = 6;
   int32 flags = 7;

@@ -174,6 +174,8 @@ func WithEncryption(key *Key) func(*FS) {
 			panic(err)
 		}
 
+		fs.tocHeader.KeyId = key.pub[:]
+
 		fs.blockAccess.write.encryption = cw
 		fs.blockAccess.read.encryption = &cryptReader{key: key}
 	}
