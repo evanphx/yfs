@@ -285,6 +285,15 @@ func (f *FS) flushTOC() error {
 
 	defer of.Close()
 
+	buf, err = f.blockAccess.writeTransform(buf[:slen])
+	if err != nil {
+		return err
+	}
+
+	tocSum := blake2b.Sum256(buf)
+
+	f.tocHeader.Sum = tocSum[:]
+
 	hdata := make([]byte, 256)
 
 	hlen, err := f.tocHeader.MarshalTo(hdata[1:])
@@ -295,11 +304,6 @@ func (f *FS) flushTOC() error {
 	hdata[0] = byte(hlen)
 
 	_, err = of.Write(hdata)
-	if err != nil {
-		return err
-	}
-
-	buf, err = f.blockAccess.writeTransform(buf[:slen])
 	if err != nil {
 		return err
 	}
@@ -338,6 +342,7 @@ func (f *FS) flushBlockTOC() error {
 var (
 	ErrCompressionMismatch = errors.New("compression setting mismatched")
 	ErrWrongEncryptionKey  = errors.New("wrong encryption key provided")
+	ErrCorruptTOC          = errors.New("table of contents is corrupt")
 )
 
 func (f *FS) readTOC() error {
@@ -364,6 +369,12 @@ func (f *FS) readTOC() error {
 
 	if !bytes.Equal(f.tocHeader.KeyId, fheader.KeyId) {
 		return ErrWrongEncryptionKey
+	}
+
+	dataSum := blake2b.Sum256(data[256:])
+
+	if !bytes.Equal(fheader.Sum, dataSum[:]) {
+		return ErrCorruptTOC
 	}
 
 	buf, err := f.blockAccess.readTransform(data[256:])

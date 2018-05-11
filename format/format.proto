@@ -5,6 +5,7 @@ package format;
 message TOCHeader {
   bytes key_id = 1;
   bool compressed = 2;
+  bytes sum = 3;
 }
 
 message Block {
