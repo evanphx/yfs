@@ -3,11 +3,13 @@ package yfs
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 
 	"github.com/evanphx/yfs/format"
+	"github.com/golang/crypto/blake2b"
 )
 
 type blockTransform interface {
@@ -108,6 +110,8 @@ func (ba *blockAccess) readTransform(block []byte) ([]byte, error) {
 	return block, nil
 }
 
+var ErrCorruptBlock = errors.New("corrupt block detected")
+
 func (ba *blockAccess) readBlock(sum []byte) ([]byte, error) {
 	hid := hex.EncodeToString(sum)
 
@@ -124,7 +128,18 @@ func (ba *blockAccess) readBlock(sum []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return ba.readTransform(rawBlock)
+	data, err := ba.readTransform(rawBlock)
+	if err != nil {
+		return nil, err
+	}
+
+	seenSum := blake2b.Sum256(data)
+
+	if !bytes.Equal(sum, seenSum[:]) {
+		return data, ErrCorruptBlock
+	}
+
+	return data, nil
 }
 
 func (ba *blockAccess) readSet(set *format.BlockSet) ([]byte, error) {

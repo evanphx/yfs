@@ -199,7 +199,7 @@ func TestFS(t *testing.T) {
 		rogueBA.root = filepath.Join(path, "blocks")
 
 		data, err := rogueBA.readBlock(id)
-		require.NoError(t, err)
+		require.Error(t, err) // returns the data and the corruption detection
 
 		assert.NotEqual(t, "hello", string(data))
 
