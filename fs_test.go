@@ -2,6 +2,7 @@ package yfs
 
 import (
 	"bytes"
+	"io"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -45,7 +46,7 @@ func TestFS(t *testing.T) {
 		fs2, err := NewFS(path)
 		require.NoError(t, err)
 
-		r, err := fs2.ReadFile("foo")
+		r, err := fs2.ReaderFor("foo")
 		require.NoError(t, err)
 
 		data, err := ioutil.ReadAll(r)
@@ -120,7 +121,7 @@ func TestFS(t *testing.T) {
 		fs2, err := NewFS(path, WithLZ4())
 		require.NoError(t, err)
 
-		r, err := fs2.ReadFile("foo")
+		r, err := fs2.ReaderFor("foo")
 		require.NoError(t, err)
 
 		data, err := ioutil.ReadAll(r)
@@ -173,7 +174,7 @@ func TestFS(t *testing.T) {
 		snap, err := fs.ReadSnapshot("snap1")
 		require.NoError(t, err)
 
-		r, err := snap.ReadFile("foo")
+		r, err := snap.ReaderFor("foo")
 		require.NoError(t, err)
 
 		data, err := ioutil.ReadAll(r)
@@ -206,7 +207,7 @@ func TestFS(t *testing.T) {
 		fs3, err := NewFS(path, WithEncryption(key))
 		require.NoError(t, err)
 
-		r, err := fs3.ReadFile("foo")
+		r, err := fs3.ReaderFor("foo")
 		require.NoError(t, err)
 
 		data, err = ioutil.ReadAll(r)
@@ -236,7 +237,7 @@ func TestFS(t *testing.T) {
 		fs2, err := NewFS(path, WithEncryption(key))
 		require.NoError(t, err)
 
-		r, err := fs2.ReadFile("foo")
+		r, err := fs2.ReaderFor("foo")
 		require.NoError(t, err)
 
 		result, err := ioutil.ReadAll(r)
@@ -266,13 +267,92 @@ func TestFS(t *testing.T) {
 		fs2, err := NewFS(path, WithEncryption(key), WithLZ4())
 		require.NoError(t, err)
 
-		r, err := fs2.ReadFile("foo")
+		r, err := fs2.ReaderFor("foo")
 		require.NoError(t, err)
 
 		result, err := ioutil.ReadAll(r)
 		require.NoError(t, err)
 
 		assert.Equal(t, com, result)
+	})
+
+	n.It("provides a writer to write data to a path", func(t *testing.T) {
+		fs, err := NewFS(path)
+		require.NoError(t, err)
+
+		w, err := fs.WriterFor("foo")
+		require.NoError(t, err)
+
+		n, err := w.Write([]byte("hello"))
+		require.NoError(t, err)
+
+		assert.Equal(t, n, 5)
+
+		err = w.Close()
+		require.NoError(t, err)
+
+		r, err := fs.ReaderFor("foo")
+		require.NoError(t, err)
+
+		data, err := ioutil.ReadAll(r)
+		require.NoError(t, err)
+
+		assert.Equal(t, []byte("hello"), data)
+	})
+
+	n.It("supports ReadFrom in the write path", func(t *testing.T) {
+		fs, err := NewFS(path)
+		require.NoError(t, err)
+
+		w, err := fs.WriterFor("foo")
+		require.NoError(t, err)
+
+		rw, ok := w.(io.ReaderFrom)
+		require.True(t, ok)
+
+		n, err := rw.ReadFrom(strings.NewReader("hello"))
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(5), n)
+
+		err = w.Close()
+		require.NoError(t, err)
+
+		r, err := fs.ReaderFor("foo")
+		require.NoError(t, err)
+
+		data, err := ioutil.ReadAll(r)
+		require.NoError(t, err)
+
+		assert.Equal(t, []byte("hello"), data)
+	})
+
+	n.It("supports WriterTo in the read path", func(t *testing.T) {
+		fs, err := NewFS(path)
+		require.NoError(t, err)
+
+		err = fs.WriteFile("foo", strings.NewReader("hello"))
+		require.NoError(t, err)
+
+		fs2, err := NewFS(path)
+		require.NoError(t, err)
+
+		r, err := fs2.ReaderFor("foo")
+		require.NoError(t, err)
+
+		wr, ok := r.(io.WriterTo)
+		require.True(t, ok)
+
+		var buf bytes.Buffer
+
+		n, err := wr.WriteTo(&buf)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(5), n)
+
+		data := buf.String()
+
+		assert.Equal(t, "hello", data)
 	})
 
 	n.Meow()

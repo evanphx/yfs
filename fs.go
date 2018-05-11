@@ -141,11 +141,13 @@ func (f *FS) CopyFile(path string, of *os.File) error {
 
 	ent.ModifiedAt = &format.TimeSpec{stat.ModTime().Unix(), int32(stat.ModTime().Nanosecond())}
 
-	return f.writeFile(path, of, ent)
+	_, err = f.writeFile(path, of, ent)
+	return err
 }
 
 func (f *FS) WriteFile(path string, r io.Reader) error {
-	return f.writeFile(path, r, &format.Entry{})
+	_, err := f.writeFile(path, r, &format.Entry{})
+	return err
 }
 
 func (f *FS) writeAsBlocks(r io.Reader) (*format.BlockSet, error) {
@@ -224,10 +226,10 @@ func (f *FS) writeAsBlocks(r io.Reader) (*format.BlockSet, error) {
 	return set, nil
 }
 
-func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) error {
+func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) (int64, error) {
 	set, err := f.writeAsBlocks(r)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	ent.ByteSize = set.ByteSize
@@ -239,10 +241,10 @@ func (f *FS) writeFile(path string, r io.Reader, ent *format.Entry) error {
 
 	err = f.flushBlockTOC()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	return f.flushTOC()
+	return set.ByteSize, f.flushTOC()
 }
 
 func (f *FS) writeBlock(sum []byte, block []byte) (int64, error) {
@@ -435,7 +437,7 @@ func (f *FS) readBlocksTOC() error {
 type blockReader struct {
 	f      *FS
 	blocks []*format.Block
-	cur    io.Reader
+	cur    *bytes.Reader
 	clz    io.Reader
 }
 
@@ -482,13 +484,104 @@ func (b *blockReader) Read(buf []byte) (int, error) {
 	return n + m, err
 }
 
-func (f *FS) ReadFile(path string) (io.Reader, error) {
+func (b *blockReader) WriteTo(w io.Writer) (int64, error) {
+	var total int64
+
+	if b.cur != nil {
+		n, err := io.Copy(w, b.cur)
+		if err != nil {
+			return 0, err
+		}
+
+		total += int64(n)
+	}
+
+	for _, blk := range b.blocks {
+		data, err := b.f.blockAccess.readBlock(blk.Id)
+		if err != nil {
+			return total, err
+		}
+
+		n, err := w.Write(data)
+		if err != nil {
+			return total, err
+		}
+
+		total += int64(n)
+	}
+
+	b.blocks = nil
+
+	return total, nil
+}
+
+func (f *FS) ReaderFor(path string) (io.Reader, error) {
 	entry, ok := f.toc.Paths[path]
 	if !ok {
 		return nil, os.ErrNotExist
 	}
 
 	return &blockReader{f: f, blocks: entry.Blocks.Blocks}, nil
+}
+
+type blockWriter struct {
+	f     *FS
+	path  string
+	entry *format.Entry
+
+	pr   *io.PipeReader
+	pw   *io.PipeWriter
+	bg   bool
+	werr chan error
+}
+
+func (b *blockWriter) consume() {
+	_, err := b.f.writeFile(b.path, b.pr, b.entry)
+	b.werr <- err
+}
+
+func (b *blockWriter) Write(data []byte) (int, error) {
+	if !b.bg {
+		b.pr, b.pw = io.Pipe()
+		go b.consume()
+		b.bg = true
+	}
+
+	return b.pw.Write(data)
+}
+
+func (b *blockWriter) ReadFrom(r io.Reader) (int64, error) {
+	if b.bg {
+		// mixed use, have to keep using the background version
+		return io.Copy(b.pw, r)
+	}
+
+	return b.f.writeFile(b.path, r, b.entry)
+}
+
+func (b *blockWriter) Close() error {
+	if b.bg {
+		b.pw.Close()
+		return <-b.werr
+	}
+
+	return nil
+}
+
+func (f *FS) WriterFor(path string) (io.WriteCloser, error) {
+	entry, ok := f.toc.Paths[path]
+	if !ok {
+		entry = &format.Entry{}
+	}
+
+	bw := &blockWriter{
+		f:     f,
+		path:  path,
+		entry: entry,
+		werr:  make(chan error, 1),
+	}
+
+	return bw, nil
 }
 
 var ErrCorruptFile = errors.New("corrupt file detected")
