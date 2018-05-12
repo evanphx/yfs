@@ -6,6 +6,8 @@ message TOCHeader {
   bytes key_id = 1;
   bool compressed = 2;
   bytes sum = 3;
+  int64 toc_size = 4;
+  int64 blocks_size = 5;
 }
 
 message Block {
@@ -56,4 +58,5 @@ message BlockInfo {
 
 message BlockTOC {
   repeated BlockInfo blocks = 1;
+  bytes bloom_filter = 2;
 }

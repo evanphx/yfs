@@ -12,6 +12,12 @@ import (
 	"github.com/golang/crypto/blake2b"
 )
 
+type BlockId []byte
+
+func (b BlockId) String() string {
+	return hex.EncodeToString(b)
+}
+
 type blockTransform interface {
 	Transform(src []byte) ([]byte, []byte, error)
 }
@@ -52,8 +58,8 @@ func (ba *blockAccess) writeTransform(block []byte) ([]byte, error) {
 	return block, nil
 }
 
-func (ba *blockAccess) writeBlock(sum []byte, block []byte) (int64, error) {
-	id := hex.EncodeToString(sum)
+func (ba *blockAccess) writeBlock(bid BlockId, block []byte) (int64, error) {
+	id := bid.String()
 
 	dir := filepath.Join(ba.root, id[:6])
 	err := os.MkdirAll(dir, 0755)
@@ -80,12 +86,7 @@ func (ba *blockAccess) writeBlock(sum []byte, block []byte) (int64, error) {
 		return 0, err
 	}
 
-	stat, err := of.Stat()
-	if err != nil {
-		return 0, err
-	}
-
-	return stat.Size(), nil
+	return int64(len(block)), nil
 }
 
 func (ba *blockAccess) readTransform(block []byte) ([]byte, error) {
@@ -112,8 +113,8 @@ func (ba *blockAccess) readTransform(block []byte) ([]byte, error) {
 
 var ErrCorruptBlock = errors.New("corrupt block detected")
 
-func (ba *blockAccess) readBlock(sum []byte) ([]byte, error) {
-	hid := hex.EncodeToString(sum)
+func (ba *blockAccess) readBlock(bid BlockId) ([]byte, error) {
+	hid := bid.String()
 
 	path := filepath.Join(ba.root, hid[:6], hid)
 	f, err := os.Open(path)
@@ -135,7 +136,7 @@ func (ba *blockAccess) readBlock(sum []byte) ([]byte, error) {
 
 	seenSum := blake2b.Sum256(data)
 
-	if !bytes.Equal(sum, seenSum[:]) {
+	if !bytes.Equal(bid, seenSum[:]) {
 		return data, ErrCorruptBlock
 	}
 

@@ -160,16 +160,21 @@ func TestFS(t *testing.T) {
 		err = fs.WriteFile("foo", strings.NewReader("hello"))
 		require.NoError(t, err)
 
+		fds, err := ioutil.ReadDir(filepath.Join(path, "blocks"))
+		require.NoError(t, err)
+
+		require.Equal(t, 2, len(fds))
+
 		err = fs.CreateSnapshot("snap1")
 		require.NoError(t, err)
 
 		err = fs.RemoveFile("foo")
 		require.NoError(t, err)
 
-		fds, err := ioutil.ReadDir(filepath.Join(path, "blocks"))
+		fds, err = ioutil.ReadDir(filepath.Join(path, "blocks"))
 		require.NoError(t, err)
 
-		assert.Equal(t, len(fds), 2)
+		require.Equal(t, 3, len(fds))
 
 		snap, err := fs.ReadSnapshot("snap1")
 		require.NoError(t, err)
